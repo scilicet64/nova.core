@@ -45,30 +45,71 @@
         - vm_template is not defined
         - base_vm_template is not defined
 
-    - name: Looking up the VM template...
-      vmware.vmware_rest.vcenter_vm_info:
-        filter_names: "{{ vm_template if not template else base_vm_template }}"
-      register: template_search_result
-      until: not template_search_result.failed
-      retries: 5
-      delay: 2
+    #- name: Looking up the VM template...
+    #  vmware.vmware_rest.vcenter_vm_info:
+    ##    filter_names: "{{ vm_template if not template else base_vm_template }}"
+    #  register: template_search_result
+    # until: not template_search_result.failed
+    #  retries: 5
+    #  delay: 2
 
-    - name: Missing VM template...
-      ansible.builtin.fail:
-        msg: Cannot find template - {{ vm_template if not template else base_vm_template }}
-      when: template_search_result.value == []
 
-    - name: Getting information about the VM template...
-      vmware.vmware_rest.vcenter_vm_info:
-        vm: "{{ template_search_result.value[0].vm }}"
-      register: vm_template_information
-      until: not vm_template_information.failed
-      retries: 5
-      delay: 2
 
+    - name: Get libraries (REST)
+      vmware.vmware_rest.content_locallibrary_info:
+        vcenter_hostname: "{{ vcenter_hostname }}"
+        vcenter_username: "{{ vcenter_username }}"
+        vcenter_password: "{{ vcenter_password }}"
+        vcenter_validate_certs: "{{ vcenter_validate_certs }}"
+      register: libs
+
+    - name: Show COMPLETE libraries variable
+      debug:
+        var: libs
+
+    - name: Extract library id by name
+      set_fact:
+        library_id: >-
+          {{ (libs.value | selectattr('name','equalto', library_name)
+                        | map(attribute='id') | list | first) }}
+
+    - name: Fail if library not found
+      fail:
+        msg: "Content Library '{{ library_name }}' not found."
+      when: library_id is not defined or library_id is none
+
+    - name: Get ALL items in the library (use library_id, not libraries)
+      vmware.vmware.content_library_item_info:
+        hostname: "{{ vcenter_hostname }}" 
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        library_id: "{{ library_id }}"
+      register: lib_items
+
+    - name: Show COMPLETE library items variable
+      debug:
+        var: lib_items
+
+    - name: Pick the item matching our template name
+      set_fact:
+        cl_item: >-
+          {{ (lib_items.library_item_info | selectattr('name','equalto', vm_template)
+                              | list | first) }}
+
+    - name: Fail if the template item was not found
+      fail:
+        msg: "Template '{{ vm_template }}' not found in Content Library '{{ library_name }}'."
+      when: cl_item is not defined or cl_item is none
+
+    - name: Show the COMPLETE item object (single)
+      debug:
+        var: cl_item
+        
+           
     - name: Getting template OS disk size...
       ansible.builtin.set_fact:
-        template_disk_size: "{{ vm_template_information.value.disks[(vm_template_information.value.disks | first)].capacity // (1024 * 1024) | int }}"
+        template_disk_size: "{{ cl_item.size // (1024 * 1024) | int }}"
 
     # This task can be removed when local inventories are moved to Providentia
     - name: Setting OS disk size...
